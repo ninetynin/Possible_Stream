@@ -1,6 +1,6 @@
 import cv2
 import io
-import socket
+import socket as s
 import struct
 import time
 import pickle
@@ -8,11 +8,16 @@ import numpy as np
 import imutils
 
 
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-# client_socket.connect(('0.tcp.ngrok.io', 19194))
-client_socket.connect(('10.19.15.138', 8485))
+client_socket = s.socket(s.AF_INET, s.SOCK_STREAM)
 
+# client_socket.connect(('0.tcp.ng.rok.io', 19194))
+client_socket.connect(('10.54.1.197', 8485))
+
+print('Socket connected')
+wCam, hCam = 640, 480
 cam = cv2.VideoCapture(0)
+cam.set(3, wCam)
+cam.set(4, hCam)
 img_counter = 0
 
 #encode to jpeg format
@@ -22,9 +27,9 @@ encode_param=[int(cv2.IMWRITE_JPEG_QUALITY),90]
 
 while True:
     ret, frame = cam.read()
-    # 影像縮放
-    frame = imutils.resize(frame, width=320)
-    # 鏡像
+    # frame = cv2.resize(frame, (640, 480))
+    # frame = imutils.resize(frame, width=320)
+
     frame = cv2.flip(frame,180)
     result, image = cv2.imencode('.jpg', frame, encode_param)
     data = pickle.dumps(image, 0)

@@ -10,8 +10,12 @@ import struct ## new
 import zlib
 from PIL import Image, ImageOps
 
-HOST=''
+import sys
+
+HOST ='10.54.1.197'
 PORT=8485
+
+# import Non_Touch.AIVirtualMouse as AIVirtualMouse
 
 s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 print('Socket created')
@@ -44,6 +48,10 @@ while True:
     # unpack image using pickle 
     frame=pickle.loads(frame_data, fix_imports=True, encoding="bytes")
     frame = cv2.imdecode(frame, cv2.IMREAD_COLOR)
+    # AIVirtualMouse.VirtualMouse(frame)
 
+    # cv2.namedWindow('server', cv2.WINDOW_KEEPRATIO)
     cv2.imshow('server',frame)
-    cv2.waitKey(1)
+    # cv2.resizeWindow('server', 640, 480)
+    if (cv2.waitKey(1) & 0xFF == ord('d')):
+        break
