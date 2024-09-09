@@ -4,20 +4,21 @@ import cv2
 import pickle
 import struct
 import threading
+import gc
 from deepface import DeepFace
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
-
-from logger import get_logger
+from PyQt5.QtCore import pyqtSignal, QObject
+from logger import get_logger, get_analysis_logger
+import sqlite3
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-
-HOST = '10.90.0.177'  # Replace with your server's IP address
+HOST = '10.90.0.177'
 PORT = 9999
 
 logger = get_logger(__name__)
+analysis_logger = get_analysis_logger()
 
 class SignalEmitter(QObject):
     update_ui = pyqtSignal(object, object)
@@ -42,7 +43,7 @@ class ClientUI(QMainWindow):
         self.gender_label = QLabel("Gender: ")
         self.emotion_label = QLabel("Emotion: ")
         self.face_confidence_label = QLabel("Face Confidence: ")
-        
+
         analysis_layout.addWidget(self.age_label)
         analysis_layout.addWidget(self.gender_label)
         analysis_layout.addWidget(self.emotion_label)
@@ -74,10 +75,14 @@ class ClientUI(QMainWindow):
         self.emotion_label.setText(f"Emotion: {dominant_emotion} ({emotions.get(dominant_emotion, 'N/A'):.2f}%)")
         self.face_confidence_label.setText(f"Face Confidence: {result.get('face_confidence', 'N/A'):.2f}")
 
+def decompress_frame(data):
+    frame = pickle.loads(data)
+    return frame
+
 def analyze_frame(frame):
     try:
         result = DeepFace.analyze(frame, actions=['age', 'gender', 'emotion'], enforce_detection=False)
-        logger.info(f"Analysis result: {result}")
+        analysis_logger.debug(f"Analysis result: {result}")
         return result
     except Exception as e:
         logger.error(f"Error analyzing image: {e}")
@@ -86,43 +91,45 @@ def analyze_frame(frame):
 def client_thread(signal_emitter):
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect((HOST, PORT))
-    logger.info(f"Connected to server at {HOST}:{PORT}")
+    logger.info(f"Connected to server: {HOST}:{PORT}")
 
-    data = b""
+    data_buffer = b""
     payload_size = struct.calcsize("Q")
 
     try:
         while True:
-            while len(data) < payload_size:
+            while len(data_buffer) < payload_size:
                 packet = client_socket.recv(4 * 1024)
-                if not packet: 
-                    raise ConnectionError("Failed to receive data from the server.")
-                data += packet
+                if not packet:
+                    break
+                data_buffer += packet
 
-            packed_msg_size = data[:payload_size]
-            data = data[payload_size:]
+            packed_msg_size = data_buffer[:payload_size]
+            data_buffer = data_buffer[payload_size:]
             msg_size = struct.unpack("Q", packed_msg_size)[0]
 
-            # Receive the actual frame data
-            while len(data) < msg_size:
-                data += client_socket.recv(4 * 1024)
+            while len(data_buffer) < msg_size:
+                data_buffer += client_socket.recv(4 * 1024)
 
-            frame_data = data[:msg_size]
-            data = data[msg_size:]
+            frame_data = data_buffer[:msg_size]
+            data_buffer = data_buffer[msg_size:]
 
-            frame = pickle.loads(frame_data)
+            frame = decompress_frame(frame_data)
+
             analysis_result = analyze_frame(frame)
 
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             signal_emitter.update_ui.emit(rgb_frame, analysis_result)
 
-            logger.info("Received and processed frame from server.")
+            gc.collect()
+
+    except ConnectionResetError as e:
+        logger.error(f"Connection reset: {e}")
     except Exception as e:
         logger.error(f"Error in client thread: {e}")
     finally:
         client_socket.close()
-        logger.info("Client disconnected from server.")
-
+        logger.info("Client disconnected.")
 
 if __name__ == "__main__":
     app = QApplication([])

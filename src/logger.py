@@ -12,5 +12,21 @@ logging.basicConfig(
 )
 
 def get_logger(name):
-    logger = logging.getLogger(name)
-    return logger
+    return logging.getLogger(name)
+
+
+def get_analysis_logger():
+    analysis_log_path = os.path.join(log_dir, "analysis_logs.log")
+    analysis_logger = logging.getLogger("analysis_logger")
+    analysis_logger.setLevel(logging.DEBUG)
+
+    file_handler = logging.FileHandler(analysis_log_path)
+    file_handler.setLevel(logging.DEBUG)
+
+    formatter = logging.Formatter('%(asctime)s - %(message)s')
+    file_handler.setFormatter(formatter)
+
+    if not analysis_logger.handlers:
+        analysis_logger.addHandler(file_handler)
+    
+    return analysis_logger

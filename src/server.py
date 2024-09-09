@@ -4,20 +4,22 @@ import cv2
 import pickle
 import struct
 import threading
+import gc
 from deepface import DeepFace
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
-
-from logger import get_logger  
+from PyQt5.QtCore import pyqtSignal, QObject
+from logger import get_logger, get_analysis_logger
+import sqlite3
+import random
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
 
 HOST = socket.gethostbyname(socket.gethostname())
 PORT = 9999
 
-logger = get_logger(__name__) 
+logger = get_logger(__name__)
+analysis_logger = get_analysis_logger()
 
 class SignalEmitter(QObject):
     update_ui = pyqtSignal(object, object)
@@ -42,7 +44,7 @@ class ServerUI(QMainWindow):
         self.gender_label = QLabel("Gender: ")
         self.emotion_label = QLabel("Emotion: ")
         self.face_confidence_label = QLabel("Face Confidence: ")
-        
+
         analysis_layout.addWidget(self.age_label)
         analysis_layout.addWidget(self.gender_label)
         analysis_layout.addWidget(self.emotion_label)
@@ -74,14 +76,53 @@ class ServerUI(QMainWindow):
         self.emotion_label.setText(f"Emotion: {dominant_emotion} ({emotions.get(dominant_emotion, 'N/A'):.2f}%)")
         self.face_confidence_label.setText(f"Face Confidence: {result.get('face_confidence', 'N/A'):.2f}")
 
+def compress_frame(frame, scale_percent=25, to_grayscale=False):
+    width = int(frame.shape[1] * scale_percent / 100)
+    height = int(frame.shape[0] * scale_percent / 100)
+    dim = (width, height)
+    resized_frame = cv2.resize(frame, dim, interpolation=cv2.INTER_AREA)
+    
+    if to_grayscale:
+        resized_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
+    
+    return resized_frame
+
+def get_network_bandwidth():
+    return random.choice([300, 700, 1500])  # Example bandwidths in Kbps
+
 def analyze_frame(frame):
     try:
         result = DeepFace.analyze(frame, actions=['age', 'gender', 'emotion'], enforce_detection=False)
-        logger.info(f"Analysis result: {result}")
+        analysis_logger.debug(f"Analysis result: {result}")
+
+        store_results(result)
+
         return result
     except Exception as e:
         logger.error(f"Error analyzing image: {e}")
         return []
+
+def store_results(result):
+    conn = sqlite3.connect('db/analysis_results.db')
+    cursor = conn.cursor()
+
+    if isinstance(result, list) and len(result) > 0:
+        result = result[0]
+
+    age = result.get('age')
+    dominant_gender = result.get('dominant_gender')
+    gender = result.get('gender', {}).get(dominant_gender, 0)
+    emotions = result.get('emotion', {})
+    dominant_emotion = max(emotions, key=emotions.get) if emotions else 'N/A'
+    face_confidence = result.get('face_confidence')
+
+    cursor.execute('''
+        INSERT INTO analysis (age, gender, emotion, face_confidence)
+        VALUES (?, ?, ?, ?)
+    ''', (age, dominant_gender, dominant_emotion, face_confidence))
+
+    conn.commit()
+    conn.close()
 
 def server_thread(signal_emitter):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -101,7 +142,12 @@ def server_thread(signal_emitter):
                 logger.error("Failed to read frame from video capture.")
                 break
 
-            img_serialize = pickle.dumps(frame)
+            bandwidth = get_network_bandwidth()
+            scale_percent = 75 if bandwidth > 1000 else (50 if bandwidth > 500 else 25)
+
+            compressed_frame = compress_frame(frame, scale_percent=scale_percent)
+
+            img_serialize = pickle.dumps(compressed_frame)
             message = struct.pack("Q", len(img_serialize)) + img_serialize
             client_socket.sendall(message)
             logger.info("Sent frame to client.")
@@ -110,6 +156,8 @@ def server_thread(signal_emitter):
 
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             signal_emitter.update_ui.emit(rgb_frame, analysis_result)
+
+            gc.collect()
 
             if cv2.waitKey(10) == 13:
                 break
@@ -122,7 +170,6 @@ def server_thread(signal_emitter):
         client_socket.close()
         server_socket.close()
         logger.info("Server shut down.")
-
 
 if __name__ == "__main__":
     app = QApplication([])
