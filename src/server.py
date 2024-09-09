@@ -4,14 +4,20 @@ import cv2
 import pickle
 import struct
 import threading
-import time
 from deepface import DeepFace
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QObject
+
+from logger import get_logger  
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 
 HOST = socket.gethostbyname(socket.gethostname())
 PORT = 9999
+
+logger = get_logger(__name__) 
 
 class SignalEmitter(QObject):
     update_ui = pyqtSignal(object, object)
@@ -71,63 +77,60 @@ class ServerUI(QMainWindow):
 def analyze_frame(frame):
     try:
         result = DeepFace.analyze(frame, actions=['age', 'gender', 'emotion'], enforce_detection=False)
+        logger.info(f"Analysis result: {result}")
         return result
     except Exception as e:
-        print('Error analyzing image:', e)
+        logger.error(f"Error analyzing image: {e}")
         return []
-
-# def analyze_frame(frame):
-#     try:
-#         result = DeepFace.analyze(frame,
-#                                   actions=['age', 'gender', 'emotion'],
-#                                   enforce_detection=False,
-#                                   detector_backend='retinaface',
-#                                   age_model='age_real',
-#                                   gender_model='gender_vgg',
-#                                   emotion_model='emotion_ferplus')
-#         return result
-#     except Exception as e:
-#         print('Error analyzing image:', e)
-#         return []
 
 def server_thread(signal_emitter):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((HOST, PORT))
     server_socket.listen(1)
-    print(f"Listening at: {HOST}:{PORT}")
+    logger.info(f"Server listening at: {HOST}:{PORT}")
 
     client_socket, addr = server_socket.accept()
-    print(f"Connected to: {addr}")
+    logger.info(f"Connected to: {addr}")
 
     vid = cv2.VideoCapture(0)
 
-    while vid.isOpened():
-        ret, frame = vid.read()
-        if not ret:
-            break
+    try:
+        while vid.isOpened():
+            ret, frame = vid.read()
+            if not ret:
+                logger.error("Failed to read frame from video capture.")
+                break
 
-        img_serialize = pickle.dumps(frame)
-        message = struct.pack("Q", len(img_serialize)) + img_serialize
-        client_socket.sendall(message)
+            img_serialize = pickle.dumps(frame)
+            message = struct.pack("Q", len(img_serialize)) + img_serialize
+            client_socket.sendall(message)
+            logger.info("Sent frame to client.")
 
-        analysis_result = analyze_frame(frame)
+            analysis_result = analyze_frame(frame)
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        signal_emitter.update_ui.emit(rgb_frame, analysis_result)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            signal_emitter.update_ui.emit(rgb_frame, analysis_result)
 
-        if cv2.waitKey(10) == 13:
-            break
+            if cv2.waitKey(10) == 13:
+                break
+    except ConnectionAbortedError as e:
+        logger.error(f"Connection aborted: {e}")
+    except Exception as e:
+        logger.error(f"Error in server thread: {e}")
+    finally:
+        vid.release()
+        client_socket.close()
+        server_socket.close()
+        logger.info("Server shut down.")
 
-    vid.release()
-    client_socket.close()
 
 if __name__ == "__main__":
     app = QApplication([])
     server_ui = ServerUI()
     server_ui.show()
 
-    server_thread = threading.Thread(target=server_thread, args=(server_ui.signal_emitter,))
-    server_thread.start()
+    server_thread_instance = threading.Thread(target=server_thread, args=(server_ui.signal_emitter,))
+    server_thread_instance.start()
 
     app.exec_()
-    server_thread.join()
+    server_thread_instance.join()

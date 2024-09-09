@@ -7,11 +7,17 @@ import threading
 from deepface import DeepFace
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QObject
+
+from logger import get_logger
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 
 HOST = '10.90.0.177'  # Replace with your server's IP address
 PORT = 9999
+
+logger = get_logger(__name__)
 
 class SignalEmitter(QObject):
     update_ui = pyqtSignal(object, object)
@@ -71,67 +77,60 @@ class ClientUI(QMainWindow):
 def analyze_frame(frame):
     try:
         result = DeepFace.analyze(frame, actions=['age', 'gender', 'emotion'], enforce_detection=False)
+        logger.info(f"Analysis result: {result}")
         return result
     except Exception as e:
-        print('Error analyzing image:', e)
+        logger.error(f"Error analyzing image: {e}")
         return []
-
-# def analyze_frame(frame):
-#     try:
-#         result = DeepFace.analyze(frame,
-#                                   actions=['age', 'gender', 'emotion'],
-#                                   enforce_detection=False,
-#                                   detector_backend='retinaface',
-#                                   age_model='age_real',
-#                                   gender_model='gender_vgg',
-#                                   emotion_model='emotion_ferplus')
-#         return result
-#     except Exception as e:
-#         print('Error analyzing image:', e)
-#         return []
-
 
 def client_thread(signal_emitter):
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect((HOST, PORT))
+    logger.info(f"Connected to server at {HOST}:{PORT}")
 
     data = b""
-    metadata_size = struct.calcsize("Q")
+    payload_size = struct.calcsize("Q")
 
-    while True:
-        while len(data) < metadata_size:
-            packet = client_socket.recv(4 * 1024)
-            if not packet:
-                break
-            data += packet
-        packed_msg_size = data[:metadata_size]
-        data = data[metadata_size:]
-        msg_size = struct.unpack("Q", packed_msg_size)[0]
+    try:
+        while True:
+            while len(data) < payload_size:
+                packet = client_socket.recv(4 * 1024)
+                if not packet: 
+                    raise ConnectionError("Failed to receive data from the server.")
+                data += packet
 
-        while len(data) < msg_size:
-            data += client_socket.recv(4 * 1024)
-        frame_data = data[:msg_size]
-        data = data[msg_size:]
-        frame = pickle.loads(frame_data)
+            packed_msg_size = data[:payload_size]
+            data = data[payload_size:]
+            msg_size = struct.unpack("Q", packed_msg_size)[0]
 
+            # Receive the actual frame data
+            while len(data) < msg_size:
+                data += client_socket.recv(4 * 1024)
 
-        analysis_result = analyze_frame(frame)
+            frame_data = data[:msg_size]
+            data = data[msg_size:]
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        signal_emitter.update_ui.emit(rgb_frame, analysis_result)
+            frame = pickle.loads(frame_data)
+            analysis_result = analyze_frame(frame)
 
-        if cv2.waitKey(10) == 13:
-            break
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            signal_emitter.update_ui.emit(rgb_frame, analysis_result)
 
-    client_socket.close()
+            logger.info("Received and processed frame from server.")
+    except Exception as e:
+        logger.error(f"Error in client thread: {e}")
+    finally:
+        client_socket.close()
+        logger.info("Client disconnected from server.")
+
 
 if __name__ == "__main__":
     app = QApplication([])
     client_ui = ClientUI()
     client_ui.show()
 
-    client_thread = threading.Thread(target=client_thread, args=(client_ui.signal_emitter,))
-    client_thread.start()
+    client_thread_instance = threading.Thread(target=client_thread, args=(client_ui.signal_emitter,))
+    client_thread_instance.start()
 
     app.exec_()
-    client_thread.join()
+    client_thread_instance.join()
