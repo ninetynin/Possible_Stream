@@ -1,5 +1,12 @@
-Guidelines:
-PS S:\githubrepos\Possible_Stream> python -m venv venv
-PS S:\githubrepos\Possible_Stream> venv\Scripts\activate
-activate the venv and install the libraries
-using pip install -r requirements.txt
+## Setup and Installation
+
+1. **Create a Virtual Environment**:
+    ```
+    python -m venv venv
+    venv\Scripts\activate  # for powershell
+2. **Install the Required Libraries**:
+    ```
+    pip install -r requirements.txt
+    ```
+
+
